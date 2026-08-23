@@ -24,9 +24,10 @@ needed. Re-run the same line any time to update. To uninstall, drag `HtmlEditor.
    and `<img src="the-image.png" alt="">` is inserted where the cursor is.
 4. **Save** — ⌘S.
 
-The right pane is a live preview, and it's editable too — type in it and the markup pane updates to
-match. Clicking in either pane scrolls the other to the matching spot. The app reopens whatever you
-had open last time.
+The right pane is a live preview. It is a real browser view by default, so scripts run and buttons
+respond to clicks — turn on **Edit in Preview** (⌥⌘E) when you want to type into it directly.
+Clicking in either pane scrolls the other to the matching spot. The app reopens whatever you had
+open last time.
 
 ## Build from a clone
 
@@ -56,18 +57,28 @@ can't resolve a platform SDK from the Command Line Tools alone. `build.sh` is th
 | Toggle preview | ⇧⌘P |
 | Refresh preview | ⌘R |
 | Find / Find Next / Previous | ⌘F / ⌘G / ⇧⌘G |
-| Edit in preview (on/off) | ⌥⌘E |
+| Edit in preview (off by default) | ⌥⌘E |
 
-## Two-way editing
+## Editing in the preview (⌥⌘E)
 
-The preview runs with `designMode` on, so you can type directly into the rendered page. Edits are
-serialized back into the markup pane (as one undoable step, so ⌘Z works), and pasting a picture there
-saves the file next to the document exactly as it does in the markup pane.
+Off by default, and worth understanding before you turn it on.
 
-One caveat worth knowing: when you edit in the preview, the markup is re-serialized by WebKit, which
-normalizes it — indentation and attribute order are WebKit's, not yours. Editing in the markup pane
-never touches your formatting. Turn preview editing off with ⌥⌘E if you want the rendered pane to
-stay strictly read-only.
+Editing the rendered page means putting it in `designMode`, and that has two consequences. Clicks go
+to the editor instead of the page, so interactive controls — a click-to-copy button, say — stop
+responding while it's on. And when you type, the markup pane is rewritten by serializing the *live*
+document, which is not the same text you wrote:
+
+- WebKit normalizes it. Indentation and attribute order become WebKit's.
+- Anything the page's own scripts built at runtime becomes permanent markup. A copy button generated
+  by a script gets written into the file, without the `onclick` the script assigned in JavaScript —
+  so on the next load you have one dead button plus a fresh one the script adds. This is why the app
+  warns you before enabling preview editing on a page that contains `<script>`.
+
+Editing in the markup pane never touches your formatting, and the preview stays a faithful render of
+it. Preview editing is for hand-written, script-free pages; reach for it there and it's pleasant.
+
+Edits sync back as one undoable step (⌘Z restores), and pasting a picture into the preview saves it
+next to the document exactly as it does in the markup pane.
 
 Panes stay in sync through a `data-he-pos` attribute stamped onto each opening tag when the preview
 is rendered. It records the tag's character offset in the source, which is what lets a click on either

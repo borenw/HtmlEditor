@@ -271,7 +271,25 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     }
 
     @objc func togglePreviewEditing(_ sender: Any?) {
+        if !preview.isEditable, documentContainsScript, !confirmScriptedPreviewEditing() { return }
         preview.isEditable.toggle()
+    }
+
+    private var documentContainsScript: Bool {
+        textView.string.range(of: "<script", options: .caseInsensitive) != nil
+    }
+
+    /// Typing in the preview re-serializes the live page, so anything the page's
+    /// own scripts built at runtime gets written into the file — and handlers
+    /// assigned in JavaScript don't survive the trip.
+    private func confirmScriptedPreviewEditing() -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Editing the preview will rewrite this page"
+        alert.informativeText = "This document contains scripts. When you type in the preview, the whole page is written back from the rendered document, so elements your scripts created at runtime become part of the markup — and click handlers assigned in JavaScript are lost.\n\nEdit in the markup pane to leave the file exactly as you wrote it."
+        alert.addButton(withTitle: "Enable Anyway")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     @objc func refreshPreview(_ sender: Any?) {

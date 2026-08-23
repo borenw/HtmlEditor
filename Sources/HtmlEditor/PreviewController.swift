@@ -17,7 +17,9 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
     let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
     weak var delegate: PreviewControllerDelegate?
 
-    var isEditable = true {
+    /// Off by default: designMode swallows clicks, so scripts and interactive
+    /// controls only behave like a real browser while the preview is read-only.
+    var isEditable = false {
         didSet { applyEditableState() }
     }
 
@@ -154,6 +156,7 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
         // Typing in the preview writes the document back to the markup pane.
         function syncSource() {
             var clone = document.documentElement.cloneNode(true);
+            clone.removeAttribute(POS);
             var stamped = clone.querySelectorAll('[' + POS + ']');
             for (var i = 0; i < stamped.length; i++) { stamped[i].removeAttribute(POS); }
             post({ type: 'edit', html: clone.outerHTML });
