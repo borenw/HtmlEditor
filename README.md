@@ -27,7 +27,8 @@ open build/HtmlEditor.app
 
 The build is ad-hoc signed, so the first launch may need a right-click ▸ **Open** to get past Gatekeeper.
 
-If you have full Xcode installed, `swift build` works too via `Package.swift`.
+`Package.swift` is also included for `swift build`, but that path needs full Xcode — SwiftPM
+can't resolve a platform SDK from the Command Line Tools alone. `build.sh` is the supported route.
 
 ## Keyboard shortcuts
 
