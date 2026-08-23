@@ -19,6 +19,9 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     private var isApplyingPreviewEdit = false
     /// Set while the caret is being moved programmatically from a preview click.
     private var isApplyingPreviewSelection = false
+    /// Set once the user picks preview editing for the open document, overriding
+    /// the per-document default until another document is loaded.
+    private var previewEditingOverride: Bool?
 
     private static let starterDocument = """
     <!DOCTYPE html>
@@ -61,6 +64,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
 
         if !restoreLastDocument() {
             textView.string = EditorWindowController.starterDocument
+            applyPreviewEditingDefault()
             updateTitle()
             renderPreview()
         }
@@ -126,6 +130,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         textView.string = EditorWindowController.starterDocument
         textView.undoManager?.removeAllActions()
         isDirty = false
+        previewEditingOverride = nil
+        applyPreviewEditingDefault()
         updateTitle()
         renderPreview()
     }
@@ -149,6 +155,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
             textView.string = text
             textView.undoManager?.removeAllActions()
             isDirty = false
+            previewEditingOverride = nil
+            applyPreviewEditingDefault()
             updateTitle()
             renderPreview()
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
@@ -273,6 +281,14 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     @objc func togglePreviewEditing(_ sender: Any?) {
         if !preview.isEditable, documentContainsScript, !confirmScriptedPreviewEditing() { return }
         preview.isEditable.toggle()
+        previewEditingOverride = preview.isEditable
+    }
+
+    /// A page without scripts round-trips through the DOM safely, so it opens
+    /// ready to edit in either pane. A scripted page would have its generated
+    /// markup baked in, so that one starts read-only and takes a deliberate ⌥⌘E.
+    private func applyPreviewEditingDefault() {
+        preview.isEditable = previewEditingOverride ?? !documentContainsScript
     }
 
     private var documentContainsScript: Bool {

@@ -24,10 +24,10 @@ needed. Re-run the same line any time to update. To uninstall, drag `HtmlEditor.
    and `<img src="the-image.png" alt="">` is inserted where the cursor is.
 4. **Save** — ⌘S.
 
-The right pane is a live preview. It is a real browser view by default, so scripts run and buttons
-respond to clicks — turn on **Edit in Preview** (⌥⌘E) when you want to type into it directly.
-Clicking in either pane scrolls the other to the matching spot. The app reopens whatever you had
-open last time.
+The right pane is a live preview, and on an ordinary page you can type straight into it. A page
+containing `<script>` opens read-only instead, so its buttons and scripts keep working like they do
+in a browser — ⌥⌘E overrides the choice either way. Clicking in either pane scrolls the other to the
+matching spot. The app reopens whatever you had open last time.
 
 ## Build from a clone
 
@@ -57,11 +57,12 @@ can't resolve a platform SDK from the Command Line Tools alone. `build.sh` is th
 | Toggle preview | ⇧⌘P |
 | Refresh preview | ⌘R |
 | Find / Find Next / Previous | ⌘F / ⌘G / ⇧⌘G |
-| Edit in preview (off by default) | ⌥⌘E |
+| Edit in preview (on/off) | ⌥⌘E |
 
 ## Editing in the preview (⌥⌘E)
 
-Off by default, and worth understanding before you turn it on.
+The preview is editable by default, except on pages that contain `<script>`, where it starts
+read-only. ⌥⌘E flips it for the current document. Here is why the distinction exists.
 
 Editing the rendered page means putting it in `designMode`, and that has two consequences. Clicks go
 to the editor instead of the page, so interactive controls — a click-to-copy button, say — stop
@@ -75,7 +76,9 @@ document, which is not the same text you wrote:
   warns you before enabling preview editing on a page that contains `<script>`.
 
 Editing in the markup pane never touches your formatting, and the preview stays a faithful render of
-it. Preview editing is for hand-written, script-free pages; reach for it there and it's pleasant.
+it. That is the whole reason for the split default: script-free pages round-trip through the DOM
+safely and open ready to edit on both sides, while scripted ones stay read-only until you say
+otherwise.
 
 Edits sync back as one undoable step (⌘Z restores), and pasting a picture into the preview saves it
 next to the document exactly as it does in the markup pane.
