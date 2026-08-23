@@ -5,6 +5,17 @@ the image is written to disk next to the HTML file and an `<img>` tag is inserte
 
 No Electron, no dependencies — AppKit and WebKit only.
 
+## Install
+
+Paste this into Terminal — it builds from source and drops the app in `/Applications`, then opens it:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/borenw/HtmlEditor/main/install.sh | bash
+```
+
+The only requirement is the Xcode Command Line Tools (`xcode-select --install`); full Xcode is not
+needed. Re-run the same line any time to update. To uninstall, drag `HtmlEditor.app` to the Trash.
+
 ## What it does
 
 1. **Open an existing `.html` file** — File ▸ Open… (⌘O), or drop the file on the app icon.
@@ -16,16 +27,18 @@ No Electron, no dependencies — AppKit and WebKit only.
 A live preview sits in the right pane and re-renders as you type. Because the preview is rendered
 from the document's own folder, pasted images show up in it immediately.
 
-## Build
-
-Requires macOS 12+ and the Xcode Command Line Tools (`xcode-select --install`). Full Xcode is not needed.
+## Build from a clone
 
 ```sh
-./build.sh
+git clone https://github.com/borenw/HtmlEditor.git
+cd HtmlEditor
+./build.sh              # builds into build/HtmlEditor.app, doesn't install
 open build/HtmlEditor.app
 ```
 
-The build is ad-hoc signed, so the first launch may need a right-click ▸ **Open** to get past Gatekeeper.
+`./install.sh` from a clone does the same but installs to `/Applications`.
+
+Both scripts ad-hoc sign the bundle and clear the quarantine flag, so there's no Gatekeeper detour.
 
 `Package.swift` is also included for `swift build`, but that path needs full Xcode — SwiftPM
 can't resolve a platform SDK from the Command Line Tools alone. `build.sh` is the supported route.
