@@ -4,8 +4,9 @@ import WebKit
 protocol PreviewControllerDelegate: AnyObject {
     /// The user clicked in the preview; `position` is an offset into the markup.
     func preview(_ preview: PreviewController, didClickAtSourcePosition position: Int)
-    /// The user typed in the preview; `html` is the whole document, re-serialized.
-    func preview(_ preview: PreviewController, didEditDocument html: String)
+    /// The user typed in the preview. `position` is the source offset of the
+    /// element that changed and `html` is that element's markup, re-serialized.
+    func preview(_ preview: PreviewController, didEditElementAt position: Int, html: String)
     /// The user pasted an image into the preview.
     func preview(_ preview: PreviewController, didPasteImage data: Data, fileExtension: String)
 }
@@ -17,9 +18,9 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
     let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
     weak var delegate: PreviewControllerDelegate?
 
-    /// Off by default: designMode swallows clicks, so scripts and interactive
-    /// controls only behave like a real browser while the preview is read-only.
-    var isEditable = false {
+    /// Turning this off gives a live browser view, where the page's own scripts
+    /// handle clicks instead of the editor swallowing them.
+    var isEditable = true {
         didSet { applyEditableState() }
     }
 
@@ -81,6 +82,12 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
         webView.evaluateJavaScript("window.__heInsertImage(\(encoded))")
     }
 
+    /// After the markup pane is patched, offsets recorded in the page no longer
+    /// line up; shift the ones after the edit and drop the ones inside it.
+    func reconcileOffsets(after position: Int, delta: Int) {
+        webView.evaluateJavaScript("window.__heAfterPatch(\(position), \(delta))")
+    }
+
     private func applyEditableState() {
         webView.evaluateJavaScript("document.designMode = '\(isEditable ? "on" : "off")'")
     }
@@ -102,8 +109,9 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
             guard let position = (body["position"] as? NSNumber)?.intValue else { return }
             delegate?.preview(self, didClickAtSourcePosition: position)
         case "edit":
-            guard let html = body["html"] as? String else { return }
-            delegate?.preview(self, didEditDocument: "<!DOCTYPE html>\n" + html)
+            guard let html = body["html"] as? String,
+                  let position = (body["position"] as? NSNumber)?.intValue else { return }
+            delegate?.preview(self, didEditElementAt: position, html: html)
         case "image":
             guard let base64 = body["data"] as? String,
                   let data = Data(base64Encoded: base64) else { return }
@@ -140,37 +148,62 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
             window.webkit.messageHandlers.editor.postMessage(message);
         }
 
-        function sourcePosition(node) {
+        function stampedAncestor(node) {
             var element = node;
             while (element && element.nodeType !== 1) { element = element.parentNode; }
             while (element && !element.hasAttribute(POS)) { element = element.parentElement; }
-            return element ? parseInt(element.getAttribute(POS), 10) : null;
+            return element;
+        }
+
+        function selectedElement() {
+            var selection = document.getSelection();
+            if (!selection || !selection.rangeCount) { return null; }
+            return stampedAncestor(selection.getRangeAt(0).commonAncestorContainer);
         }
 
         // Clicking in the preview moves the caret in the markup pane.
         document.addEventListener('click', function (event) {
-            var position = sourcePosition(event.target);
-            if (position !== null && !isNaN(position)) { post({ type: 'cursor', position: position }); }
+            var element = stampedAncestor(event.target);
+            if (!element) { return; }
+            var position = parseInt(element.getAttribute(POS), 10);
+            if (!isNaN(position)) { post({ type: 'cursor', position: position }); }
         }, true);
 
-        // Typing in the preview writes the document back to the markup pane.
-        function syncSource() {
-            var clone = document.documentElement.cloneNode(true);
+        // Typing sends back ONLY the element that changed, so the rest of the
+        // file keeps its formatting and nothing the page's scripts built at
+        // runtime gets written into the markup.
+        var pendingElement = null;
+        var syncTimer = null;
+
+        function flush() {
+            clearTimeout(syncTimer);
+            syncTimer = null;
+            var element = pendingElement;
+            pendingElement = null;
+            if (!element || !element.isConnected) { return; }
+            var position = parseInt(element.getAttribute(POS), 10);
+            if (isNaN(position)) { return; }
+            var clone = element.cloneNode(true);
             clone.removeAttribute(POS);
             var stamped = clone.querySelectorAll('[' + POS + ']');
             for (var i = 0; i < stamped.length; i++) { stamped[i].removeAttribute(POS); }
-            post({ type: 'edit', html: clone.outerHTML });
+            post({ type: 'edit', position: position, html: clone.outerHTML });
         }
 
-        var syncTimer = null;
         document.addEventListener('input', function () {
+            var element = selectedElement();
+            if (!element) { return; }
+            // Moving to a different element commits the previous one first.
+            if (pendingElement && pendingElement !== element) { flush(); }
+            pendingElement = element;
             clearTimeout(syncTimer);
-            syncTimer = setTimeout(syncSource, 400);
+            syncTimer = setTimeout(flush, 400);
         });
 
         // A pasted picture goes through the app so it lands next to the .html file
         // instead of becoming an unsaveable blob: URL.
         document.addEventListener('paste', function (event) {
+            if (document.designMode !== 'on') { return; }
             var items = event.clipboardData ? event.clipboardData.items : null;
             if (!items) { return; }
             for (var i = 0; i < items.length; i++) {
@@ -200,7 +233,28 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
 
         window.__heInsertImage = function (source) {
             document.execCommand('insertHTML', false, '<img src="' + source + '">');
-            syncSource();
+            pendingElement = selectedElement();
+            flush();
+        };
+
+        // Keep recorded offsets aligned with the markup after a patch.
+        window.__heAfterPatch = function (position, delta) {
+            var all = document.querySelectorAll('[' + POS + ']');
+            var edited = null;
+            for (var i = 0; i < all.length; i++) {
+                if (parseInt(all[i].getAttribute(POS), 10) === position) { edited = all[i]; break; }
+            }
+            if (edited) {
+                // Everything inside the patched element was replaced wholesale,
+                // so those offsets mean nothing until the next full render.
+                var inside = edited.querySelectorAll('[' + POS + ']');
+                for (var j = 0; j < inside.length; j++) { inside[j].removeAttribute(POS); }
+            }
+            for (var k = 0; k < all.length; k++) {
+                if (!all[k].hasAttribute(POS)) { continue; }
+                var value = parseInt(all[k].getAttribute(POS), 10);
+                if (value > position) { all[k].setAttribute(POS, String(value + delta)); }
+            }
         };
     })();
     """

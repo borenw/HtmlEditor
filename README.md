@@ -24,10 +24,8 @@ needed. Re-run the same line any time to update. To uninstall, drag `HtmlEditor.
    and `<img src="the-image.png" alt="">` is inserted where the cursor is.
 4. **Save** — ⌘S.
 
-The right pane is a live preview, and on an ordinary page you can type straight into it. A page
-containing `<script>` opens read-only instead, so its buttons and scripts keep working like they do
-in a browser — ⌥⌘E overrides the choice either way. Clicking in either pane scrolls the other to the
-matching spot. The app reopens whatever you had open last time.
+The right pane is a live preview you can type straight into, on any page. Clicking in either pane
+scrolls the other to the matching spot. The app reopens whatever you had open last time.
 
 ## Build from a clone
 
@@ -61,32 +59,31 @@ can't resolve a platform SDK from the Command Line Tools alone. `build.sh` is th
 
 ## Editing in the preview (⌥⌘E)
 
-The preview is editable by default, except on pages that contain `<script>`, where it starts
-read-only. ⌥⌘E flips it for the current document. Here is why the distinction exists.
+Type in the rendered page and the markup pane follows. The edit is applied **surgically**: only the
+element you actually touched is rewritten, located by its recorded source offset. Everything else in
+the file — indentation, attribute order, scripts, the elements you didn't touch — is left byte for
+byte as you wrote it.
 
-Editing the rendered page means putting it in `designMode`, and that has two consequences. Clicks go
-to the editor instead of the page, so interactive controls — a click-to-copy button, say — stop
-responding while it's on. And when you type, the markup pane is rewritten by serializing the *live*
-document, which is not the same text you wrote:
+That precision is what makes this safe. Serializing the whole rendered document back into the file
+would reformat all of it and, worse, bake in whatever the page's scripts had built at runtime: a copy
+button created by a script would be written into the markup *without* the `onclick` its script
+assigned in JavaScript, leaving one dead button plus a fresh one on the next load. Patching a single
+element avoids all of that.
 
-- WebKit normalizes it. Indentation and attribute order become WebKit's.
-- Anything the page's own scripts built at runtime becomes permanent markup. A copy button generated
-  by a script gets written into the file, without the `onclick` the script assigned in JavaScript —
-  so on the next load you have one dead button plus a fresh one the script adds. This is why the app
-  warns you before enabling preview editing on a page that contains `<script>`.
+Two things to know:
 
-Editing in the markup pane never touches your formatting, and the preview stays a faithful render of
-it. That is the whole reason for the split default: script-free pages round-trip through the DOM
-safely and open ready to edit on both sides, while scripted ones stay read-only until you say
-otherwise.
+- The element you edit is re-serialized by WebKit, so its own indentation and attribute order may
+  change. Its neighbours are untouched.
+- `designMode` routes clicks to the editor, so the page's own buttons don't respond while editing is
+  on. ⌥⌘E turns it off for a live browser view where scripts and buttons behave normally.
 
-Edits sync back as one undoable step (⌘Z restores), and pasting a picture into the preview saves it
-next to the document exactly as it does in the markup pane.
+Pasting a picture into the preview saves it next to the document exactly as it does in the markup pane.
 
 Panes stay in sync through a `data-he-pos` attribute stamped onto each opening tag when the preview
 is rendered. It records the tag's character offset in the source, which is what lets a click on either
-side find its counterpart. The attribute exists only in the rendered copy — it is stripped before
-markup comes back from the preview, and it never reaches your saved file.
+side find its counterpart and what tells a preview edit which element to patch. The attribute exists
+only in the rendered copy — it is stripped before markup comes back from the preview, and it never
+reaches your saved file.
 
 ## How image pasting works
 

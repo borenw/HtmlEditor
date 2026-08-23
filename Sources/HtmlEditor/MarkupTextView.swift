@@ -61,11 +61,12 @@ final class MarkupTextView: NSTextView {
         setSelectedRange(NSRange(location: range.location + (text as NSString).length, length: 0))
     }
 
-    /// Swaps the whole document in one undoable step, for edits made in the preview.
-    func replaceEntireText(with text: String) {
-        let whole = NSRange(location: 0, length: (string as NSString).length)
-        guard shouldChangeText(in: whole, replacementString: text) else { return }
-        textStorage?.replaceCharacters(in: whole, with: text)
+    /// Replaces a range in one undoable step, for edits made in the preview.
+    @discardableResult
+    func replace(_ range: NSRange, with text: String) -> Bool {
+        guard shouldChangeText(in: range, replacementString: text) else { return false }
+        textStorage?.replaceCharacters(in: range, with: text)
         didChangeText()
+        return true
     }
 }

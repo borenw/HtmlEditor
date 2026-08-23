@@ -19,9 +19,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     private var isApplyingPreviewEdit = false
     /// Set while the caret is being moved programmatically from a preview click.
     private var isApplyingPreviewSelection = false
-    /// Set once the user picks preview editing for the open document, overriding
-    /// the per-document default until another document is loaded.
-    private var previewEditingOverride: Bool?
 
     private static let starterDocument = """
     <!DOCTYPE html>
@@ -64,7 +61,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
 
         if !restoreLastDocument() {
             textView.string = EditorWindowController.starterDocument
-            applyPreviewEditingDefault()
             updateTitle()
             renderPreview()
         }
@@ -130,8 +126,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         textView.string = EditorWindowController.starterDocument
         textView.undoManager?.removeAllActions()
         isDirty = false
-        previewEditingOverride = nil
-        applyPreviewEditingDefault()
         updateTitle()
         renderPreview()
     }
@@ -155,8 +149,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
             textView.string = text
             textView.undoManager?.removeAllActions()
             isDirty = false
-            previewEditingOverride = nil
-            applyPreviewEditingDefault()
             updateTitle()
             renderPreview()
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
@@ -278,34 +270,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         if !previewItem.isCollapsed { renderPreview() }
     }
 
+    /// Off turns the pane into a live browser view, where the page's own scripts
+    /// receive clicks instead of the editor swallowing them.
     @objc func togglePreviewEditing(_ sender: Any?) {
-        if !preview.isEditable, documentContainsScript, !confirmScriptedPreviewEditing() { return }
         preview.isEditable.toggle()
-        previewEditingOverride = preview.isEditable
-    }
-
-    /// A page without scripts round-trips through the DOM safely, so it opens
-    /// ready to edit in either pane. A scripted page would have its generated
-    /// markup baked in, so that one starts read-only and takes a deliberate ⌥⌘E.
-    private func applyPreviewEditingDefault() {
-        preview.isEditable = previewEditingOverride ?? !documentContainsScript
-    }
-
-    private var documentContainsScript: Bool {
-        textView.string.range(of: "<script", options: .caseInsensitive) != nil
-    }
-
-    /// Typing in the preview re-serializes the live page, so anything the page's
-    /// own scripts built at runtime gets written into the file — and handlers
-    /// assigned in JavaScript don't survive the trip.
-    private func confirmScriptedPreviewEditing() -> Bool {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Editing the preview will rewrite this page"
-        alert.informativeText = "This document contains scripts. When you type in the preview, the whole page is written back from the rendered document, so elements your scripts created at runtime become part of the markup — and click handlers assigned in JavaScript are lost.\n\nEdit in the markup pane to leave the file exactly as you wrote it."
-        alert.addButton(withTitle: "Enable Anyway")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
     }
 
     @objc func refreshPreview(_ sender: Any?) {
@@ -340,11 +308,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         isApplyingPreviewSelection = false
     }
 
-    func preview(_ preview: PreviewController, didEditDocument html: String) {
-        guard html != textView.string else { return }
+    /// Patches just the element that changed. Rewriting the whole document here
+    /// would reformat the file and bake in whatever the page's scripts had built.
+    func preview(_ preview: PreviewController, didEditElementAt position: Int, html: String) {
+        guard let range = SourceMap.elementRange(in: textView.string, startingAt: position) else { return }
+        let existing = (textView.string as NSString).substring(with: range)
+        guard existing != html else { return }
         isApplyingPreviewEdit = true
-        textView.replaceEntireText(with: html)
+        let applied = textView.replace(range, with: html)
         isApplyingPreviewEdit = false
+        guard applied else { return }
+        preview.reconcileOffsets(after: position, delta: (html as NSString).length - range.length)
     }
 
     func preview(_ preview: PreviewController, didPasteImage data: Data, fileExtension: String) {

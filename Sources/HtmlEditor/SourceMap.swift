@@ -115,6 +115,111 @@ enum SourceMap {
         (unit >= 65 && unit <= 90) ? unit + 32 : unit
     }
 
+
+    /// Void elements have no closing tag, so their source range is the tag itself.
+    private static let voidElements: Set<String> = [
+        "area", "base", "br", "col", "embed", "hr", "img",
+        "input", "link", "meta", "param", "source", "track", "wbr"
+    ]
+
+    /// The source range of the whole element whose opening tag starts at `position`,
+    /// closing tag included. Returns nil if the markup is unbalanced from there.
+    static func elementRange(in source: String, startingAt position: Int) -> NSRange? {
+        let units = Array(source.utf16)
+        guard position >= 0, position + 1 < units.count,
+              units[position] == lessThan, isNameStart(units[position + 1]) else { return nil }
+
+        var nameEnd = position + 1
+        while nameEnd < units.count, isNameCharacter(units[nameEnd]) { nameEnd += 1 }
+        let name = elementName(units, from: position + 1, to: nameEnd)
+
+        var isSelfClosing = false
+        guard let openingTagEnd = endOfTag(units, from: nameEnd, isSelfClosing: &isSelfClosing) else { return nil }
+        if isSelfClosing || voidElements.contains(name) {
+            return NSRange(location: position, length: openingTagEnd - position)
+        }
+
+        var depth = 1
+        var i = openingTagEnd
+        while i < units.count {
+            if matches("<!--", in: units, at: i) {
+                i = skip(units, from: i, past: "-->")
+                continue
+            }
+
+            // A closing tag for our own element.
+            if matches("</", in: units, at: i), matches(name, in: units, at: i + 2),
+               !isNameCharacter(unit(units, at: i + 2 + name.utf16.count)) {
+                var ignored = false
+                guard let closeEnd = endOfTag(units, from: i + 2, isSelfClosing: &ignored) else { return nil }
+                depth -= 1
+                if depth == 0 { return NSRange(location: position, length: closeEnd - position) }
+                i = closeEnd
+                continue
+            }
+
+            guard units[i] == lessThan, i + 1 < units.count, isNameStart(units[i + 1]) else {
+                i += 1
+                continue
+            }
+
+            var otherEnd = i + 1
+            while otherEnd < units.count, isNameCharacter(units[otherEnd]) { otherEnd += 1 }
+            let other = elementName(units, from: i + 1, to: otherEnd)
+            var otherIsSelfClosing = false
+            guard let end = endOfTag(units, from: otherEnd, isSelfClosing: &otherIsSelfClosing) else { return nil }
+            i = end
+
+            if rawTextElements.contains(other) {
+                // "<" inside a script body is text, not a nested tag.
+                let closing = "</\(other)"
+                while i < units.count, !matches(closing, in: units, at: i) { i += 1 }
+            } else if other == name, !otherIsSelfClosing, !voidElements.contains(other) {
+                depth += 1
+            }
+        }
+        return nil
+    }
+
+    private static func elementName(_ units: [UInt16], from start: Int, to end: Int) -> String {
+        String(utf16CodeUnits: Array(units[start..<end]), count: end - start).lowercased()
+    }
+
+    private static func unit(_ units: [UInt16], at index: Int) -> UInt16 {
+        (index >= 0 && index < units.count) ? units[index] : 0
+    }
+
+    /// Index just past the tag's ">", ignoring ">" inside attribute values.
+    private static func endOfTag(_ units: [UInt16], from start: Int, isSelfClosing: inout Bool) -> Int? {
+        var i = start
+        var quote: UInt16?
+        var lastNonSpace: UInt16 = 0
+        while i < units.count {
+            let c = units[i]
+            if let open = quote {
+                if c == open { quote = nil }
+            } else if c == doubleQuote || c == singleQuote {
+                quote = c
+            } else if c == greaterThan {
+                isSelfClosing = (lastNonSpace == slash)
+                return i + 1
+            }
+            if c != 32 && c != 9 && c != 10 && c != 13 { lastNonSpace = c }
+            i += 1
+        }
+        return nil
+    }
+
+    private static func skip(_ units: [UInt16], from start: Int, past terminator: String) -> Int {
+        var i = start
+        let length = terminator.utf16.count
+        while i < units.count {
+            if matches(terminator, in: units, at: i) { return i + length }
+            i += 1
+        }
+        return units.count
+    }
+
     private static func isNameStart(_ unit: UInt16) -> Bool {
         (unit >= 65 && unit <= 90) || (unit >= 97 && unit <= 122)
     }
