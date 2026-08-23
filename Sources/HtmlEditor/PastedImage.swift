@@ -8,6 +8,14 @@ struct PastedImage {
     var suggestedName: String
     var fileExtension: String
 
+    /// Cheap check for menu validation — does not decode the image.
+    static func isAvailable(on pasteboard: NSPasteboard) -> Bool {
+        if NSImage.canInit(with: pasteboard) { return true }
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        guard let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] else { return false }
+        return urls.contains { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .image) == true }
+    }
+
     /// Reads the first image the pasteboard can offer, preferring a real file
     /// (so we keep its name and encoding) over raw bitmap data.
     static func read(from pasteboard: NSPasteboard) -> PastedImage? {

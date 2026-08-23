@@ -26,6 +26,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu
 
+    private func findItem(_ title: String, _ action: NSTextFinder.Action, _ key: String, _ modifiers: NSEvent.ModifierFlags) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: #selector(NSTextView.performTextFinderAction(_:)), keyEquivalent: key)
+        item.keyEquivalentModifierMask = modifiers
+        item.tag = action.rawValue
+        return item
+    }
+
     private func buildMenu() {
         let mainMenu = NSMenu()
 
@@ -63,7 +70,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(.separator())
-        editMenu.addItem(withTitle: "Find…", action: #selector(NSTextView.performFindPanelAction(_:)), keyEquivalent: "f")
+        // performTextFinderAction reads which operation to run off the item's tag.
+        editMenu.addItem(findItem("Find…", .showFindInterface, "f", [.command]))
+        editMenu.addItem(findItem("Find Next", .nextMatch, "g", [.command]))
+        editMenu.addItem(findItem("Find Previous", .previousMatch, "g", [.command, .shift]))
+        editMenu.addItem(findItem("Use Selection for Find", .setSearchString, "e", [.command]))
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
 
@@ -73,6 +84,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         togglePreview.keyEquivalentModifierMask = [.command, .shift]
         viewMenu.addItem(togglePreview)
         viewMenu.addItem(withTitle: "Refresh Preview", action: #selector(EditorWindowController.refreshPreview(_:)), keyEquivalent: "r")
+        viewMenu.addItem(.separator())
+        let toggleEditing = NSMenuItem(title: "Edit in Preview", action: #selector(EditorWindowController.togglePreviewEditing(_:)), keyEquivalent: "e")
+        toggleEditing.keyEquivalentModifierMask = [.command, .option]
+        viewMenu.addItem(toggleEditing)
         viewMenuItem.submenu = viewMenu
         mainMenu.addItem(viewMenuItem)
 
