@@ -103,6 +103,10 @@ Two things to know:
 
 Pasting a picture into the preview saves it next to the document exactly as it does in the markup pane.
 
+Typing in the preview is debounced, so saving commits whatever is still waiting before it writes —
+otherwise ⌘S moments after typing would store markup missing the last thing you typed. Closing and
+quitting do the same, so a pending edit still counts as unsaved work.
+
 ### Moving and resizing pictures
 
 While preview editing is on, click a picture to select it — a frame with eight handles appears.
