@@ -11,7 +11,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     private static let previewZoomKey = "PreviewPageZoom"
 
     private let textView = MarkupTextView()
-    private let preview = PreviewController()
+    let preview = PreviewController()
     private var previewItem: NSSplitViewItem!
     private let recentDocuments = RecentDocumentsMenu()
     private var markupScrollView: NSScrollView!
@@ -202,6 +202,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         return true
     }
 
+    /// The offset an id maps to, provided the markup there is really that element.
+    /// Passing `html` also checks the element type matches, so a patch can never
+    /// drop one kind of element on top of another.
+    private func placeableOffset(for id: Int, matching html: String?) -> Int? {
+        guard let position = preview.sourceOffset(forElementWithID: id),
+              let tag = SourceMap.tagName(in: textView.string, at: position),
+              SourceMap.elementRange(in: textView.string, startingAt: position) != nil else { return nil }
+        if let html = html, SourceMap.leadingTagName(of: html) != tag { return nil }
+        return position
+    }
+
     /// Sent by an Open Recent item, which carries its URL as representedObject.
     @objc func openRecentDocument(_ sender: Any?) {
         guard let url = (sender as? NSMenuItem)?.representedObject as? URL else { return }
@@ -221,6 +232,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     }
 
     private func write(to url: URL) -> Bool {
+        commitPendingPreviewEdits()
         do {
             try textView.string.write(to: url, atomically: true, encoding: .utf8)
             isDirty = false
@@ -230,6 +242,25 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         } catch {
             presentError("Could not save \(url.lastPathComponent)", error.localizedDescription)
             return false
+        }
+    }
+
+    /// Typing in the preview is debounced, so a save issued moments later would
+    /// otherwise write markup that is missing the last thing typed. Commit it
+    /// first, and give the page a moment to hand it back.
+    private func commitPendingPreviewEdits() {
+        guard !previewItem.isCollapsed, preview.isEditable else { return }
+
+        var flushed = false
+        preview.flushPendingEdits { flushed = true }
+        let flushDeadline = Date().addingTimeInterval(0.5)
+        while !flushed && Date() < flushDeadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+        // The edit is posted from the page asynchronously, so let it land.
+        let settleDeadline = Date().addingTimeInterval(0.2)
+        while Date() < settleDeadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
         }
     }
 
@@ -429,18 +460,19 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
 
     /// Patches just the element that changed. Rewriting the whole document here
     /// would reformat the file and bake in whatever the page's scripts had built.
-    func preview(_ preview: PreviewController, didEditElementWithID id: Int, html: String) {
-        guard let position = preview.sourceOffset(forElementWithID: id),
-              let range = SourceMap.elementRange(in: textView.string, startingAt: position) else {
-            // The markup this id described is gone. Re-render rather than write
-            // to a guessed spot — a wrong guess overwrites a neighbouring element.
-            renderPreview()
+    func preview(_ preview: PreviewController, didEditElementWithID id: Int, ancestors: [Int], html: String) {
+        guard let position = placeableOffset(for: id, matching: html) else {
+            // This element can no longer be placed in the markup. Recover the
+            // edit from the nearest enclosing element that can be — discarding it
+            // here is what left a pasted picture on disk but never in the file.
+            if let recovery = ancestors.first(where: { placeableOffset(for: $0, matching: nil) != nil }) {
+                preview.resendEdit(fromElementWithID: recovery)
+            } else {
+                renderPreview()
+            }
             return
         }
-        // Belt and braces: refuse a patch that would drop one kind of element on
-        // top of another. Nothing should reach here, and if it does, resyncing is
-        // recoverable where a bad write is not.
-        guard SourceMap.tagName(in: textView.string, at: position) == SourceMap.leadingTagName(of: html) else {
+        guard let range = SourceMap.elementRange(in: textView.string, startingAt: position) else {
             renderPreview()
             return
         }
@@ -476,6 +508,9 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
 
     /// Returns false only if the user cancels out of a pending save.
     func confirmDiscardChanges() -> Bool {
+        // A preview edit still on the debounce has not marked the document dirty
+        // yet, so without this the window closes without offering to save it.
+        commitPendingPreviewEdits()
         guard isDirty else { return true }
         let alert = NSAlert()
         alert.messageText = "Save changes to \(fileURL?.lastPathComponent ?? "Untitled")?"

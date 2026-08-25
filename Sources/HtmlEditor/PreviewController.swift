@@ -5,7 +5,9 @@ protocol PreviewControllerDelegate: AnyObject {
     /// The user clicked in the preview, inside the element with this id.
     func preview(_ preview: PreviewController, didClickElementWithID id: Int)
     /// The user typed in the preview; `html` is that element's markup, re-serialized.
-    func preview(_ preview: PreviewController, didEditElementWithID id: Int, html: String)
+    /// `ancestors` are enclosing elements the page can still identify, nearest
+    /// first, for recovering the edit if `id` no longer maps to any markup.
+    func preview(_ preview: PreviewController, didEditElementWithID id: Int, ancestors: [Int], html: String)
     /// The user pasted an image into the preview.
     func preview(_ preview: PreviewController, didPasteImage data: Data, fileExtension: String)
 }
@@ -117,6 +119,19 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
         webView.evaluateJavaScript("window.__heScrollTo(\(best))")
     }
 
+    /// Commits an edit still sitting on the debounce. Saving has to do this
+    /// first, or the last thing typed in the preview never reaches the file.
+    func flushPendingEdits(completion: @escaping () -> Void) {
+        webView.evaluateJavaScript("window.__heFlushNow ? window.__heFlushNow() : false") { _, _ in
+            completion()
+        }
+    }
+
+    /// Asks the page to re-post the pending edit from an enclosing element.
+    func resendEdit(fromElementWithID id: Int) {
+        webView.evaluateJavaScript("window.__heResendFrom(\(id))")
+    }
+
     func insertImage(named name: String) {
         guard let encoded = PreviewController.javaScriptString(name) else { return }
         webView.evaluateJavaScript("window.__heInsertImage(\(encoded))")
@@ -146,7 +161,8 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
         case "edit":
             guard let html = body["html"] as? String,
                   let id = (body["id"] as? NSNumber)?.intValue else { return }
-            delegate?.preview(self, didEditElementWithID: id, html: html)
+            let ancestors = (body["ancestors"] as? [Any])?.compactMap { ($0 as? NSNumber)?.intValue } ?? []
+            delegate?.preview(self, didEditElementWithID: id, ancestors: ancestors, html: html)
         case "image":
             guard let base64 = body["data"] as? String,
                   let data = Data(base64Encoded: base64) else { return }
@@ -236,7 +252,19 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
             // the post, and later typing in there maps to this element instead.
             var inside = element.querySelectorAll('[' + ID + ']');
             for (var k = 0; k < inside.length; k++) { inside[k].removeAttribute(ID); }
-            post({ type: 'edit', id: id, html: clone.outerHTML });
+            // Ancestors that still carry an id, nearest first. If this element's
+            // id no longer maps to markup, the app can recover the edit from one
+            // of these instead of throwing the user's work away.
+            var ancestors = [];
+            var parent = element.parentElement;
+            while (parent) {
+                if (parent.hasAttribute(ID)) {
+                    var parentID = parseInt(parent.getAttribute(ID), 10);
+                    if (!isNaN(parentID)) { ancestors.push(parentID); }
+                }
+                parent = parent.parentElement;
+            }
+            post({ type: 'edit', id: id, ancestors: ancestors, html: clone.outerHTML });
         }
 
         function commit(element) {
@@ -495,6 +523,21 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
         window.__heScrollTo = function (id) {
             var target = document.querySelector('[' + ID + '="' + id + '"]');
             if (target) { target.scrollIntoView({ block: 'center' }); }
+        };
+
+        // Commit whatever is waiting on the debounce, right now.
+        window.__heFlushNow = function () {
+            flush();
+            return true;
+        };
+
+        // Re-post an edit from a larger element that the app can still place.
+        window.__heResendFrom = function (id) {
+            var element = document.querySelector('[' + ID + '="' + id + '"]');
+            if (!element) { return false; }
+            pendingElement = element;
+            flush();
+            return true;
         };
 
         window.__heInsertImage = function (source) {
