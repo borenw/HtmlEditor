@@ -89,7 +89,8 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
     }
 
     private func applyEditableState() {
-        webView.evaluateJavaScript("document.designMode = '\(isEditable ? "on" : "off")'")
+        let mode = isEditable ? "on" : "off"
+        webView.evaluateJavaScript("document.designMode = '\(mode)'; if (window.__heDeselect) { window.__heDeselect(); }")
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -143,6 +144,7 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
     private static let bridgeScript = """
     (function () {
         var POS = 'data-he-pos';
+        var UI = 'data-he-ui';
 
         function post(message) {
             window.webkit.messageHandlers.editor.postMessage(message);
@@ -161,8 +163,13 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
             return stampedAncestor(selection.getRangeAt(0).commonAncestorContainer);
         }
 
+        function isChrome(node) {
+            return !!(node && node.closest && node.closest('[' + UI + ']'));
+        }
+
         // Clicking in the preview moves the caret in the markup pane.
         document.addEventListener('click', function (event) {
+            if (isChrome(event.target)) { return; }
             var element = stampedAncestor(event.target);
             if (!element) { return; }
             var position = parseInt(element.getAttribute(POS), 10);
@@ -187,7 +194,17 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
             clone.removeAttribute(POS);
             var stamped = clone.querySelectorAll('[' + POS + ']');
             for (var i = 0; i < stamped.length; i++) { stamped[i].removeAttribute(POS); }
+            // Selection handles live in the page but must never reach the file.
+            var uiNodes = clone.querySelectorAll('[' + UI + ']');
+            for (var j = 0; j < uiNodes.length; j++) { uiNodes[j].remove(); }
             post({ type: 'edit', position: position, html: clone.outerHTML });
+        }
+
+        function commit(element) {
+            var target = element.hasAttribute(POS) ? element : stampedAncestor(element);
+            if (!target) { return; }
+            pendingElement = target;
+            flush();
         }
 
         document.addEventListener('input', function () {
@@ -220,6 +237,221 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
                 return;
             }
         }, true);
+
+        // ---- Picture move and resize -------------------------------------
+        // Handles are drawn in a fixed-position overlay marked data-he-ui, which
+        // is stripped on the way back so the chrome never lands in the markup.
+
+        var HANDLES = [
+            ['nw', '0%', '0%', 'nwse-resize'], ['n', '50%', '0%', 'ns-resize'],
+            ['ne', '100%', '0%', 'nesw-resize'], ['e', '100%', '50%', 'ew-resize'],
+            ['se', '100%', '100%', 'nwse-resize'], ['s', '50%', '100%', 'ns-resize'],
+            ['sw', '0%', '100%', 'nesw-resize'], ['w', '0%', '50%', 'ew-resize']
+        ];
+
+        var selectedImage = null;
+        var chromeBox = null;
+
+        function buildChrome() {
+            if (chromeBox && chromeBox.isConnected) { return chromeBox; }
+            chromeBox = document.createElement('div');
+            chromeBox.setAttribute(UI, '1');
+            chromeBox.setAttribute('contenteditable', 'false');
+            chromeBox.style.cssText = 'position:fixed;display:none;pointer-events:none;z-index:2147483647;';
+
+            var frame = document.createElement('div');
+            frame.setAttribute(UI, '1');
+            frame.style.cssText = 'position:absolute;left:0;top:0;right:0;bottom:0;' +
+                'border:1px solid #1e90ff;box-shadow:0 0 0 1px rgba(255,255,255,0.7);pointer-events:none;';
+            chromeBox.appendChild(frame);
+
+            var grip = document.createElement('div');
+            grip.setAttribute(UI, '1');
+            grip.setAttribute('data-he-move', '1');
+            grip.style.cssText = 'position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:auto;cursor:move;';
+            chromeBox.appendChild(grip);
+
+            for (var i = 0; i < HANDLES.length; i++) {
+                var spec = HANDLES[i];
+                var handle = document.createElement('div');
+                handle.setAttribute(UI, '1');
+                handle.setAttribute('data-he-handle', spec[0]);
+                handle.style.cssText = 'position:absolute;width:11px;height:11px;margin:-6px 0 0 -6px;' +
+                    'background:#1e90ff;border:1px solid #fff;border-radius:2px;pointer-events:auto;' +
+                    'left:' + spec[1] + ';top:' + spec[2] + ';cursor:' + spec[3] + ';';
+                chromeBox.appendChild(handle);
+            }
+
+            document.body.appendChild(chromeBox);
+            return chromeBox;
+        }
+
+        function placeChrome() {
+            if (!selectedImage || !selectedImage.isConnected) { return; }
+            var box = buildChrome();
+            var rect = selectedImage.getBoundingClientRect();
+            box.style.left = rect.left + 'px';
+            box.style.top = rect.top + 'px';
+            box.style.width = rect.width + 'px';
+            box.style.height = rect.height + 'px';
+            box.style.display = 'block';
+        }
+
+        window.__heSelectImage = function (image) {
+            selectedImage = image;
+            placeChrome();
+        };
+
+        window.__heDeselect = function () {
+            selectedImage = null;
+            if (chromeBox && chromeBox.isConnected) { chromeBox.style.display = 'none'; }
+        };
+
+        // Where "left" and "top" are actually measured from. NOT offsetParent:
+        // that reports <body> when nothing above is positioned, but the real
+        // containing block is then the initial one, whose origin is the document
+        // corner — so trusting offsetParent shifts the picture by body's margin.
+        function containingBlock(image) {
+            var node = image.parentElement;
+            while (node && node !== document.documentElement) {
+                var style = window.getComputedStyle(node);
+                if (style.position !== 'static' || style.transform !== 'none' ||
+                    style.filter !== 'none' || style.perspective !== 'none') {
+                    return node;
+                }
+                node = node.parentElement;
+            }
+            return null;
+        }
+
+        function toBlockCoordinates(image, clientX, clientY) {
+            var block = containingBlock(image);
+            if (!block) {
+                return { left: clientX + window.scrollX, top: clientY + window.scrollY };
+            }
+            var rect = block.getBoundingClientRect();
+            return {
+                left: clientX - rect.left - block.clientLeft + block.scrollLeft,
+                top: clientY - rect.top - block.clientTop + block.scrollTop
+            };
+        }
+
+        // First drag lifts the picture out of the text flow, keeping it exactly
+        // where it already sits so it does not jump under the pointer.
+        function makeAbsolute(image) {
+            if (window.getComputedStyle(image).position === 'absolute') { return; }
+            var rect = image.getBoundingClientRect();
+            var coordinates = toBlockCoordinates(image, rect.left, rect.top);
+            image.style.position = 'absolute';
+            image.style.left = Math.round(coordinates.left) + 'px';
+            image.style.top = Math.round(coordinates.top) + 'px';
+        }
+
+        function drag(onMove) {
+            function move(event) { event.preventDefault(); onMove(event); placeChrome(); }
+            function up() {
+                document.removeEventListener('mousemove', move, true);
+                document.removeEventListener('mouseup', up, true);
+                placeChrome();
+                if (selectedImage) { commit(selectedImage); }
+            }
+            document.addEventListener('mousemove', move, true);
+            document.addEventListener('mouseup', up, true);
+        }
+
+        function startMove(event) {
+            var image = selectedImage;
+            if (!image) { return; }
+            // Grab offset must be read before the picture leaves the flow.
+            var rect = image.getBoundingClientRect();
+            var grabX = event.clientX - rect.left;
+            var grabY = event.clientY - rect.top;
+            makeAbsolute(image);
+            drag(function (moveEvent) {
+                var coordinates = toBlockCoordinates(image, moveEvent.clientX - grabX, moveEvent.clientY - grabY);
+                image.style.left = Math.round(coordinates.left) + 'px';
+                image.style.top = Math.round(coordinates.top) + 'px';
+            });
+        }
+
+        function startResize(event, direction) {
+            var image = selectedImage;
+            if (!image) { return; }
+            var rect = image.getBoundingClientRect();
+            var startWidth = rect.width;
+            var startHeight = rect.height;
+            var ratio = startHeight > 0 ? startWidth / startHeight : 1;
+            var startX = event.clientX;
+            var startY = event.clientY;
+            var style = window.getComputedStyle(image);
+            var absolute = style.position === 'absolute';
+            var startLeft = parseFloat(style.left) || 0;
+            var startTop = parseFloat(style.top) || 0;
+            var corner = direction.length === 2;
+
+            drag(function (moveEvent) {
+                var dx = moveEvent.clientX - startX;
+                var dy = moveEvent.clientY - startY;
+                var width = startWidth;
+                var height = startHeight;
+                if (direction.indexOf('e') >= 0) { width = startWidth + dx; }
+                if (direction.indexOf('w') >= 0) { width = startWidth - dx; }
+                if (direction.indexOf('s') >= 0) { height = startHeight + dy; }
+                if (direction.indexOf('n') >= 0) { height = startHeight - dy; }
+                width = Math.max(16, Math.round(width));
+                height = Math.max(16, Math.round(height));
+                // Corners keep the picture's proportions; edges stretch one axis.
+                if (corner) { height = Math.max(16, Math.round(width / ratio)); }
+
+                if (corner || direction === 'e' || direction === 'w') { image.style.width = width + 'px'; }
+                if (corner || direction === 'n' || direction === 's') { image.style.height = height + 'px'; }
+                // Dragging a top or left handle grows the picture the other way,
+                // so the anchored corner has to stay put.
+                if (absolute && direction.indexOf('w') >= 0) {
+                    image.style.left = Math.round(startLeft + (startWidth - width)) + 'px';
+                }
+                if (absolute && direction.indexOf('n') >= 0) {
+                    image.style.top = Math.round(startTop + (startHeight - height)) + 'px';
+                }
+            });
+        }
+
+        document.addEventListener('mousedown', function (event) {
+            if (document.designMode !== 'on') { return; }
+            var target = event.target;
+            if (!target || !target.getAttribute) { return; }
+            if (target.getAttribute('data-he-handle')) {
+                event.preventDefault();
+                startResize(event, target.getAttribute('data-he-handle'));
+                return;
+            }
+            if (target.getAttribute('data-he-move')) {
+                event.preventDefault();
+                startMove(event);
+                return;
+            }
+            if (target.tagName === 'IMG') {
+                event.preventDefault();
+                window.__heSelectImage(target);
+                startMove(event);
+                return;
+            }
+            window.__heDeselect();
+        }, true);
+
+        // Our own move replaces the browser's native image drag-and-drop.
+        document.addEventListener('dragstart', function (event) {
+            if (document.designMode === 'on' && event.target && event.target.tagName === 'IMG') {
+                event.preventDefault();
+            }
+        }, true);
+
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') { window.__heDeselect(); }
+        }, true);
+
+        window.addEventListener('scroll', placeChrome, true);
+        window.addEventListener('resize', placeChrome);
 
         window.__heScrollTo = function (position) {
             if (!document.body) { return; }

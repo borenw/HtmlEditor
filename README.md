@@ -56,6 +56,7 @@ can't resolve a platform SDK from the Command Line Tools alone. `build.sh` is th
 | Refresh preview | ⌘R |
 | Find / Find Next / Previous | ⌘F / ⌘G / ⇧⌘G |
 | Edit in preview (on/off) | ⌥⌘E |
+| Deselect a picture | Esc |
 
 ## Editing in the preview (⌥⌘E)
 
@@ -78,6 +79,25 @@ Two things to know:
   on. ⌥⌘E turns it off for a live browser view where scripts and buttons behave normally.
 
 Pasting a picture into the preview saves it next to the document exactly as it does in the markup pane.
+
+### Moving and resizing pictures
+
+While preview editing is on, click a picture to select it — a frame with eight handles appears.
+
+- **Drag the picture** to place it anywhere on the page. The first drag lifts it out of the text flow
+  and writes `position:absolute` with `left`/`top`; after that it stays exactly where you put it.
+- **Drag a corner handle** to resize with the proportions kept; **edge handles** stretch one axis.
+  Dragging a top or left handle grows the picture the other way and keeps the anchored corner put.
+- **Esc** deselects, and so does leaving edit mode.
+
+Offsets are measured from whatever the picture's real containing block is — a positioned ancestor if
+there is one, otherwise the page itself. `offsetParent` is *not* what decides this: it reports `<body>`
+when nothing above is positioned, while the actual containing block is then the initial one anchored at
+the document corner, and trusting it shifts every picture by the body margin on the first drag.
+
+The handles are drawn in a fixed overlay tagged `data-he-ui`, stripped on the way back with the offset
+stamps, so no editor chrome ever reaches your file. Each drop or resize is one undoable step (⌘Z),
+and only the `<img>` tag itself is rewritten.
 
 Panes stay in sync through a `data-he-pos` attribute stamped onto each opening tag when the preview
 is rendered. It records the tag's character offset in the source, which is what lets a click on either
