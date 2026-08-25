@@ -8,6 +8,8 @@
     <string>HtmlEditor</string>
     <key>CFBundleExecutable</key>
     <string>HtmlEditor</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>com.borenw.htmleditor</string>
     <key>CFBundlePackageType</key>

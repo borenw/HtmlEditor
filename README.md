@@ -27,6 +27,17 @@ needed. Re-run the same line any time to update. To uninstall, drag `HtmlEditor.
 The right pane is a live preview you can type straight into, on any page. Clicking in either pane
 scrolls the other to the matching spot. The app reopens whatever you had open last time.
 
+## Icon
+
+`Resources/AppIcon.icns` is generated, not hand-drawn — `Tools/MakeIcon.swift` renders every size
+natively with Core Graphics rather than downsampling one master, so the small ones stay crisp. Sizes
+below 64px drop the text lines and the page shadow, which turn to mush at that scale, and give the
+picture more room instead. Regenerate with:
+
+```sh
+./Tools/make-icon.sh
+```
+
 ## Build from a clone
 
 ```sh

@@ -32,7 +32,7 @@ fi
 say "Building for $(uname -m)…"
 STAGE="$(mktemp -d)"
 APP="$STAGE/$APP_NAME"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 swiftc -O \
     -target "$(uname -m)-apple-macos12.0" \
@@ -41,6 +41,7 @@ swiftc -O \
     -o "$APP/Contents/MacOS/HtmlEditor" || die "Build failed"
 
 cp "$SRC/Resources/Info.plist" "$APP/Contents/Info.plist"
+cp "$SRC/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
 # Ad-hoc sign and strip quarantine so it opens without a Gatekeeper detour.
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
