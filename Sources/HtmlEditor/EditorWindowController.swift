@@ -10,6 +10,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     private let textView = MarkupTextView()
     private let preview = PreviewController()
     private var previewItem: NSSplitViewItem!
+    private let recentDocuments = RecentDocumentsMenu()
 
     private var fileURL: URL?
     private var isDirty = false
@@ -50,6 +51,15 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         window.contentMinSize = NSSize(width: 700, height: 420)
         window.setContentSize(EditorWindowController.defaultContentSize)
         window.center()
+
+        let toolbar = NSToolbar(identifier: "EditorToolbar")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconAndLabel
+        toolbar.allowsUserCustomization = true
+        toolbar.autosavesConfiguration = true
+        window.toolbar = toolbar
+        // The expanded style is the one that draws full-size icons with labels.
+        window.toolbarStyle = .expanded
 
         window.setFrameAutosaveName("EditorWindow")
         window.setFrameUsingName("EditorWindow")
@@ -181,6 +191,19 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         NSDocumentController.shared.noteNewRecentDocumentURL(url)
         renderPreview()
         return true
+    }
+
+    /// Sent by an Open Recent item, which carries its URL as representedObject.
+    @objc func openRecentDocument(_ sender: Any?) {
+        guard let url = (sender as? NSMenuItem)?.representedObject as? URL else { return }
+        guard FileManager.default.isReadableFile(atPath: url.path) else {
+            NSDocumentController.shared.noteNewRecentDocumentURL(url)
+            presentError("Can't open \(url.lastPathComponent)",
+                         "The file has been moved, renamed, or deleted.")
+            return
+        }
+        guard confirmDiscardChanges() else { return }
+        open(url: url)
     }
 
     @objc func revealInFinder(_ sender: Any?) {
@@ -370,6 +393,73 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         alert.messageText = message
         alert.informativeText = detail
         alert.runModal()
+    }
+}
+
+extension NSToolbarItem.Identifier {
+    static let openDocument = NSToolbarItem.Identifier("openDocument")
+    static let openRecent = NSToolbarItem.Identifier("openRecent")
+    static let saveDocument = NSToolbarItem.Identifier("saveDocument")
+    static let togglePreviewItem = NSToolbarItem.Identifier("togglePreview")
+    static let togglePreviewEditingItem = NSToolbarItem.Identifier("togglePreviewEditing")
+}
+
+extension EditorWindowController: NSToolbarDelegate {
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.openDocument, .openRecent, .saveDocument, .flexibleSpace,
+         .togglePreviewEditingItem, .togglePreviewItem]
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarDefaultItemIdentifiers(toolbar) + [.space, .flexibleSpace]
+    }
+
+    func toolbar(_ toolbar: NSToolbar,
+                 itemForItemIdentifier identifier: NSToolbarItem.Identifier,
+                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        switch identifier {
+        case .openDocument:
+            return button(identifier, "Open", "folder", #selector(openDocument(_:)))
+        case .saveDocument:
+            return button(identifier, "Save", "square.and.arrow.down", #selector(saveDocument(_:)))
+        case .togglePreviewItem:
+            return button(identifier, "Preview", "sidebar.right", #selector(togglePreview(_:)))
+        case .togglePreviewEditingItem:
+            return button(identifier, "Edit Preview", "square.and.pencil", #selector(togglePreviewEditing(_:)))
+        case .openRecent:
+            let item = NSMenuToolbarItem(itemIdentifier: identifier)
+            item.label = "Recent"
+            item.paletteLabel = "Open Recent"
+            item.toolTip = "Open a recent document"
+            item.image = EditorWindowController.symbol("clock.arrow.circlepath")
+            item.menu = recentDocuments.makeMenu()
+            item.showsIndicator = true
+            return item
+        default:
+            return nil
+        }
+    }
+
+    private func button(_ identifier: NSToolbarItem.Identifier,
+                        _ label: String,
+                        _ symbol: String,
+                        _ action: Selector) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = label
+        item.paletteLabel = label
+        item.toolTip = label
+        item.image = EditorWindowController.symbol(symbol)
+        item.target = self
+        item.action = action
+        item.isBordered = true
+        return item
+    }
+
+    /// Toolbar glyphs, sized up so they read as buttons rather than hints.
+    static func symbol(_ name: String) -> NSImage? {
+        NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 20, weight: .regular))
     }
 }
 

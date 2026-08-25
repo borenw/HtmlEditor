@@ -2,6 +2,7 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: EditorWindowController?
+    private let recentDocuments = RecentDocumentsMenu()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
@@ -48,6 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "New", action: #selector(EditorWindowController.newDocument(_:)), keyEquivalent: "n")
         fileMenu.addItem(withTitle: "Open…", action: #selector(EditorWindowController.openDocument(_:)), keyEquivalent: "o")
+        let openRecent = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        openRecent.submenu = recentDocuments.makeMenu()
+        fileMenu.addItem(openRecent)
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Save", action: #selector(EditorWindowController.saveDocument(_:)), keyEquivalent: "s")
         let saveAs = NSMenuItem(title: "Save As…", action: #selector(EditorWindowController.saveDocumentAs(_:)), keyEquivalent: "s")
