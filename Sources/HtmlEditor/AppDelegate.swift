@@ -89,6 +89,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(togglePreview)
         viewMenu.addItem(withTitle: "Refresh Preview", action: #selector(EditorWindowController.refreshPreview(_:)), keyEquivalent: "r")
         viewMenu.addItem(.separator())
+        viewMenu.addItem(withTitle: "Zoom In", action: #selector(EditorWindowController.zoomIn(_:)), keyEquivalent: "+")
+        viewMenu.addItem(withTitle: "Zoom Out", action: #selector(EditorWindowController.zoomOut(_:)), keyEquivalent: "-")
+        viewMenu.addItem(withTitle: "Actual Size", action: #selector(EditorWindowController.actualSize(_:)), keyEquivalent: "0")
+        viewMenu.addItem(.separator())
         let toggleEditing = NSMenuItem(title: "Edit in Preview", action: #selector(EditorWindowController.togglePreviewEditing(_:)), keyEquivalent: "e")
         toggleEditing.keyEquivalentModifierMask = [.command, .option]
         viewMenu.addItem(toggleEditing)

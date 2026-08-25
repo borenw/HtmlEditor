@@ -27,6 +27,16 @@ needed. Re-run the same line any time to update. To uninstall, drag `HtmlEditor.
 The right pane is a live preview you can type straight into, on any page. Clicking in either pane
 scrolls the other to the matching spot. The app reopens whatever you had open last time.
 
+## Zoom
+
+⌘+ / ⌘− / ⌘0 zoom the pane that has focus, and ⌃⌘ with the scroll wheel zooms whichever pane the
+pointer is over. The markup pane changes font size; the preview changes page zoom, so a rendered page
+scales the way it does in Safari. Both are remembered between launches, separately.
+
+⌘= works as well as ⌘+, as it does elsewhere on the Mac. The scroll gesture is caught with a window
+level event monitor rather than a `scrollWheel` override, because WKWebView delivers scroll events to
+its own internal content view where an override on the web view never sees them.
+
 ## Icon
 
 `Resources/AppIcon.icns` is generated, not hand-drawn — `Tools/MakeIcon.swift` renders every size
@@ -68,6 +78,8 @@ can't resolve a platform SDK from the Command Line Tools alone. `build.sh` is th
 | Find / Find Next / Previous | ⌘F / ⌘G / ⇧⌘G |
 | Edit in preview (on/off) | ⌥⌘E |
 | Deselect a picture | Esc |
+| Zoom in / out / actual size | ⌘+ / ⌘− / ⌘0 |
+| Zoom by scrolling | ⌃⌘ + scroll |
 
 ## Editing in the preview (⌥⌘E)
 

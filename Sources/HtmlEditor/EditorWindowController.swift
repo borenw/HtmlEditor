@@ -6,11 +6,16 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     private static let lastDocumentBookmarkKey = "LastDocumentBookmark"
     private static let lastDocumentPathKey = "LastDocumentPath"
     private static let defaultContentSize = NSSize(width: 1100, height: 720)
+    private static let defaultMarkupFontSize: CGFloat = 13
+    private static let markupFontSizeKey = "MarkupFontSize"
+    private static let previewZoomKey = "PreviewPageZoom"
 
     private let textView = MarkupTextView()
     private let preview = PreviewController()
     private var previewItem: NSSplitViewItem!
     private let recentDocuments = RecentDocumentsMenu()
+    private var markupScrollView: NSScrollView!
+    private var zoomEventMonitor: Any?
 
     private var fileURL: URL?
     private var isDirty = false
@@ -69,6 +74,9 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
             window.center()
         }
 
+        preview.pageZoom = EditorWindowController.savedPreviewZoom
+        startWatchingForZoomGestures()
+
         if !restoreLastDocument() {
             textView.string = EditorWindowController.starterDocument
             updateTitle()
@@ -82,6 +90,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
 
     private func makeSplitViewController() -> NSSplitViewController {
         let scrollView = NSScrollView()
+        markupScrollView = scrollView
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
@@ -97,7 +106,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
         textView.allowsUndo = true
-        textView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        textView.font = NSFont.monospacedSystemFont(ofSize: markupFontSize, weight: .regular)
         textView.textContainerInset = NSSize(width: 6, height: 8)
         textView.autoresizingMask = [.width]
         textView.isVerticallyResizable = true
@@ -284,6 +293,92 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
             presentError("Could not save the pasted image", error.localizedDescription)
             return nil
         }
+    }
+
+    // MARK: - Zoom
+
+    private var markupFontSize: CGFloat {
+        get {
+            let saved = UserDefaults.standard.double(forKey: EditorWindowController.markupFontSizeKey)
+            return saved > 0 ? CGFloat(saved) : EditorWindowController.defaultMarkupFontSize
+        }
+        set {
+            let clamped = max(8, min(48, newValue))
+            UserDefaults.standard.set(Double(clamped), forKey: EditorWindowController.markupFontSizeKey)
+            textView.font = NSFont.monospacedSystemFont(ofSize: clamped, weight: .regular)
+        }
+    }
+
+    private static var savedPreviewZoom: CGFloat {
+        let saved = UserDefaults.standard.double(forKey: previewZoomKey)
+        return saved > 0 ? CGFloat(saved) : 1
+    }
+
+    private func setPreviewZoom(_ value: CGFloat) {
+        preview.pageZoom = value
+        UserDefaults.standard.set(Double(preview.pageZoom), forKey: EditorWindowController.previewZoomKey)
+    }
+
+    @objc func zoomIn(_ sender: Any?) { zoom(by: 1) }
+    @objc func zoomOut(_ sender: Any?) { zoom(by: -1) }
+
+    @objc func actualSize(_ sender: Any?) {
+        if focusIsInPreview {
+            setPreviewZoom(1)
+        } else {
+            markupFontSize = EditorWindowController.defaultMarkupFontSize
+        }
+    }
+
+    /// Menu commands act on whichever pane has focus, the way a two-pane Mac app
+    /// is expected to behave.
+    private func zoom(by steps: CGFloat) {
+        if focusIsInPreview {
+            setPreviewZoom(preview.pageZoom * (steps > 0 ? 1.1 : 1 / 1.1))
+        } else {
+            markupFontSize = markupFontSize + steps
+        }
+    }
+
+    private var focusIsInPreview: Bool {
+        guard let responder = window?.firstResponder as? NSView else { return false }
+        return responder === preview.webView || responder.isDescendant(of: preview.webView)
+    }
+
+    /// WKWebView delivers scroll events to its own internal content view, so the
+    /// gesture is caught at the window level rather than by overriding a view.
+    private func startWatchingForZoomGestures() {
+        zoomEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown]) { [weak self] event in
+            guard let self = self, event.window === self.window else { return event }
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+            if event.type == .keyDown {
+                // ⌘= is the unshifted twin of ⌘+, and Mac apps honour both.
+                guard modifiers == .command, event.charactersIgnoringModifiers == "=" else { return event }
+                self.zoomIn(nil)
+                return nil
+            }
+
+            guard modifiers == [.control, .command], event.scrollingDeltaY != 0 else { return event }
+            let overPreview = self.pointIsOverPreview(event.locationInWindow)
+            let zoomingIn = event.scrollingDeltaY > 0
+            if overPreview {
+                self.setPreviewZoom(self.preview.pageZoom * (zoomingIn ? 1.1 : 1 / 1.1))
+            } else {
+                self.markupFontSize = self.markupFontSize + (zoomingIn ? 1 : -1)
+            }
+            return nil
+        }
+    }
+
+    private func pointIsOverPreview(_ locationInWindow: NSPoint) -> Bool {
+        guard !previewItem.isCollapsed else { return false }
+        let point = preview.webView.convert(locationInWindow, from: nil)
+        return preview.webView.bounds.contains(point)
+    }
+
+    deinit {
+        if let monitor = zoomEventMonitor { NSEvent.removeMonitor(monitor) }
     }
 
     // MARK: - Preview

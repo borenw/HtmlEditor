@@ -19,6 +19,12 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
 
     /// Turning this off gives a live browser view, where the page's own scripts
     /// handle clicks instead of the editor swallowing them.
+    /// Page zoom for the rendered pane, matching Safari's ⌘+ / ⌘- behaviour.
+    var pageZoom: CGFloat {
+        get { webView.pageZoom }
+        set { webView.pageZoom = max(0.25, min(5, newValue)) }
+    }
+
     var isEditable = true {
         didSet { applyEditableState() }
     }
