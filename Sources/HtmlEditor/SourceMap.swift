@@ -1,10 +1,14 @@
 import Foundation
 
-/// Stamps every opening tag in the source with its character offset, so the
-/// preview can map a DOM node back to a spot in the markup and vice versa.
+/// Stamps every opening tag in the source with a stable id, and hands back the
+/// source offset each id refers to. The page only ever quotes ids back; the
+/// offsets stay on this side, where they are updated in the same step as the
+/// edit they describe. Sending offsets into the page instead means every patch
+/// has to be followed by an async fix-up, and an edit posted before that fix-up
+/// lands is applied at a stale offset — which silently overwrites a neighbour.
 /// The attribute only ever exists in the rendered copy — never in the saved file.
 enum SourceMap {
-    static let attribute = "data-he-pos"
+    static let attribute = "data-he-id"
 
     private static let lessThan = UInt16(UnicodeScalar("<").value)
     private static let greaterThan = UInt16(UnicodeScalar(">").value)
@@ -18,7 +22,10 @@ enum SourceMap {
     /// would corrupt scripts that contain "<".
     private static let rawTextElements: Set<String> = ["script", "style", "textarea"]
 
-    static func instrument(_ source: String) -> String {
+    /// Returns the instrumented markup and `offsets`, where `offsets[id]` is the
+    /// character offset of the opening tag stamped with that id.
+    static func instrument(_ source: String) -> (html: String, offsets: [Int]) {
+        var offsets: [Int] = []
         let units = Array(source.utf16)
         var out: [UInt16] = []
         out.reserveCapacity(units.count + units.count / 8)
@@ -53,7 +60,8 @@ enum SourceMap {
             let name = String(utf16CodeUnits: Array(units[(i + 1)..<nameEnd]), count: nameEnd - i - 1).lowercased()
 
             out.append(contentsOf: units[i..<nameEnd])
-            out.append(contentsOf: Array(" \(attribute)=\"\(i)\"".utf16))
+            offsets.append(i)
+            out.append(contentsOf: Array(" \(attribute)=\"\(offsets.count - 1)\"".utf16))
             i = copyTag(units, from: nameEnd, into: &out)
 
             if rawTextElements.contains(name) {
@@ -65,7 +73,22 @@ enum SourceMap {
             }
         }
 
-        return String(utf16CodeUnits: out, count: out.count)
+        return (String(utf16CodeUnits: out, count: out.count), offsets)
+    }
+
+    /// Name of the element whose opening tag starts at `offset`, if one does.
+    static func tagName(in source: String, at offset: Int) -> String? {
+        let units = Array(source.utf16)
+        guard offset >= 0, offset + 1 < units.count,
+              units[offset] == lessThan, isNameStart(units[offset + 1]) else { return nil }
+        var end = offset + 1
+        while end < units.count, isNameCharacter(units[end]) { end += 1 }
+        return elementName(units, from: offset + 1, to: end)
+    }
+
+    /// Name of the first element in a markup fragment.
+    static func leadingTagName(of fragment: String) -> String? {
+        tagName(in: fragment, at: 0)
     }
 
     /// Copies through the end of a tag, ignoring ">" that sits inside an attribute value.

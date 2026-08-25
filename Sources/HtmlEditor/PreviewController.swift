@@ -2,11 +2,10 @@ import AppKit
 import WebKit
 
 protocol PreviewControllerDelegate: AnyObject {
-    /// The user clicked in the preview; `position` is an offset into the markup.
-    func preview(_ preview: PreviewController, didClickAtSourcePosition position: Int)
-    /// The user typed in the preview. `position` is the source offset of the
-    /// element that changed and `html` is that element's markup, re-serialized.
-    func preview(_ preview: PreviewController, didEditElementAt position: Int, html: String)
+    /// The user clicked in the preview, inside the element with this id.
+    func preview(_ preview: PreviewController, didClickElementWithID id: Int)
+    /// The user typed in the preview; `html` is that element's markup, re-serialized.
+    func preview(_ preview: PreviewController, didEditElementWithID id: Int, html: String)
     /// The user pasted an image into the preview.
     func preview(_ preview: PreviewController, didPasteImage data: Data, fileExtension: String)
 }
@@ -26,6 +25,9 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
 
     private var previewFileURL: URL?
     private var pendingScrollPosition: Int?
+    /// offsets[id] = where that element's opening tag starts in the markup, or
+    /// -1 once a patch has replaced the text it pointed at.
+    private var offsets: [Int] = []
 
     override init() {
         super.init()
@@ -42,7 +44,8 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
     /// Renders `source`. A document on disk is rendered through a sibling temp
     /// file so relative <img src> paths resolve against the real folder.
     func render(source: String, documentURL: URL?) {
-        let html = SourceMap.instrument(source)
+        let (html, offsets) = SourceMap.instrument(source)
+        self.offsets = offsets
         guard let documentURL = documentURL else {
             previewFileURL = nil
             webView.loadHTMLString(html, baseURL: nil)
@@ -66,26 +69,51 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
         self.previewFileURL = nil
     }
 
+    // MARK: - Offset table
+
+    /// Where the element with this id currently starts, or nil once a patch has
+    /// replaced the markup it referred to.
+    func sourceOffset(forElementWithID id: Int) -> Int? {
+        guard id >= 0, id < offsets.count else { return nil }
+        return offsets[id] >= 0 ? offsets[id] : nil
+    }
+
+    /// Re-aligns the table with the markup after `range` was replaced. Called in
+    /// the same synchronous step as the edit, so no id can be read while stale.
+    func notePatch(range: NSRange, delta: Int) {
+        let end = range.location + range.length
+        for index in offsets.indices {
+            let offset = offsets[index]
+            if offset < 0 { continue }
+            if offset > range.location && offset < end {
+                offsets[index] = -1          // lived inside the replaced markup
+            } else if offset >= end {
+                offsets[index] = offset + delta
+            }
+        }
+    }
+
     // MARK: - Commands
 
-    /// Scrolls the rendered element that owns `position` in the markup into view.
+    /// Scrolls the element covering `position` in the markup into view.
     func scroll(toSourcePosition position: Int) {
         guard !webView.isLoading else {
             pendingScrollPosition = position
             return
         }
-        webView.evaluateJavaScript("window.__heScrollTo(\(position))")
+        var best = -1
+        var bestOffset = -1
+        for (id, offset) in offsets.enumerated() where offset >= 0 && offset <= position && offset > bestOffset {
+            best = id
+            bestOffset = offset
+        }
+        guard best >= 0 else { return }
+        webView.evaluateJavaScript("window.__heScrollTo(\(best))")
     }
 
     func insertImage(named name: String) {
         guard let encoded = PreviewController.javaScriptString(name) else { return }
         webView.evaluateJavaScript("window.__heInsertImage(\(encoded))")
-    }
-
-    /// After the markup pane is patched, offsets recorded in the page no longer
-    /// line up; shift the ones after the edit and drop the ones inside it.
-    func reconcileOffsets(after position: Int, delta: Int) {
-        webView.evaluateJavaScript("window.__heAfterPatch(\(position), \(delta))")
     }
 
     private func applyEditableState() {
@@ -107,12 +135,12 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
         guard let body = message.body as? [String: Any], let kind = body["type"] as? String else { return }
         switch kind {
         case "cursor":
-            guard let position = (body["position"] as? NSNumber)?.intValue else { return }
-            delegate?.preview(self, didClickAtSourcePosition: position)
+            guard let id = (body["id"] as? NSNumber)?.intValue else { return }
+            delegate?.preview(self, didClickElementWithID: id)
         case "edit":
             guard let html = body["html"] as? String,
-                  let position = (body["position"] as? NSNumber)?.intValue else { return }
-            delegate?.preview(self, didEditElementAt: position, html: html)
+                  let id = (body["id"] as? NSNumber)?.intValue else { return }
+            delegate?.preview(self, didEditElementWithID: id, html: html)
         case "image":
             guard let base64 = body["data"] as? String,
                   let data = Data(base64Encoded: base64) else { return }
@@ -143,7 +171,7 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
 
     private static let bridgeScript = """
     (function () {
-        var POS = 'data-he-pos';
+        var ID = 'data-he-id';
         var UI = 'data-he-ui';
 
         function post(message) {
@@ -153,7 +181,7 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
         function stampedAncestor(node) {
             var element = node;
             while (element && element.nodeType !== 1) { element = element.parentNode; }
-            while (element && !element.hasAttribute(POS)) { element = element.parentElement; }
+            while (element && !element.hasAttribute(ID)) { element = element.parentElement; }
             return element;
         }
 
@@ -172,8 +200,8 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
             if (isChrome(event.target)) { return; }
             var element = stampedAncestor(event.target);
             if (!element) { return; }
-            var position = parseInt(element.getAttribute(POS), 10);
-            if (!isNaN(position)) { post({ type: 'cursor', position: position }); }
+            var id = parseInt(element.getAttribute(ID), 10);
+            if (!isNaN(id)) { post({ type: 'cursor', id: id }); }
         }, true);
 
         // Typing sends back ONLY the element that changed, so the rest of the
@@ -188,20 +216,25 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
             var element = pendingElement;
             pendingElement = null;
             if (!element || !element.isConnected) { return; }
-            var position = parseInt(element.getAttribute(POS), 10);
-            if (isNaN(position)) { return; }
+            var id = parseInt(element.getAttribute(ID), 10);
+            if (isNaN(id)) { return; }
             var clone = element.cloneNode(true);
-            clone.removeAttribute(POS);
-            var stamped = clone.querySelectorAll('[' + POS + ']');
-            for (var i = 0; i < stamped.length; i++) { stamped[i].removeAttribute(POS); }
+            clone.removeAttribute(ID);
+            var stamped = clone.querySelectorAll('[' + ID + ']');
+            for (var i = 0; i < stamped.length; i++) { stamped[i].removeAttribute(ID); }
             // Selection handles live in the page but must never reach the file.
             var uiNodes = clone.querySelectorAll('[' + UI + ']');
             for (var j = 0; j < uiNodes.length; j++) { uiNodes[j].remove(); }
-            post({ type: 'edit', position: position, html: clone.outerHTML });
+            // This element's markup is about to be replaced wholesale, so the ids
+            // inside it stop meaning anything. Drop them now, in the same turn as
+            // the post, and later typing in there maps to this element instead.
+            var inside = element.querySelectorAll('[' + ID + ']');
+            for (var k = 0; k < inside.length; k++) { inside[k].removeAttribute(ID); }
+            post({ type: 'edit', id: id, html: clone.outerHTML });
         }
 
         function commit(element) {
-            var target = element.hasAttribute(POS) ? element : stampedAncestor(element);
+            var target = element.hasAttribute(ID) ? element : stampedAncestor(element);
             if (!target) { return; }
             pendingElement = target;
             flush();
@@ -453,14 +486,9 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
         window.addEventListener('scroll', placeChrome, true);
         window.addEventListener('resize', placeChrome);
 
-        window.__heScrollTo = function (position) {
-            if (!document.body) { return; }
-            var stamped = document.body.querySelectorAll('[' + POS + ']');
-            var best = null;
-            for (var i = 0; i < stamped.length; i++) {
-                if (parseInt(stamped[i].getAttribute(POS), 10) <= position) { best = stamped[i]; } else { break; }
-            }
-            if (best) { best.scrollIntoView({ block: 'center' }); }
+        window.__heScrollTo = function (id) {
+            var target = document.querySelector('[' + ID + '="' + id + '"]');
+            if (target) { target.scrollIntoView({ block: 'center' }); }
         };
 
         window.__heInsertImage = function (source) {
@@ -469,25 +497,6 @@ final class PreviewController: NSObject, WKScriptMessageHandler, WKNavigationDel
             flush();
         };
 
-        // Keep recorded offsets aligned with the markup after a patch.
-        window.__heAfterPatch = function (position, delta) {
-            var all = document.querySelectorAll('[' + POS + ']');
-            var edited = null;
-            for (var i = 0; i < all.length; i++) {
-                if (parseInt(all[i].getAttribute(POS), 10) === position) { edited = all[i]; break; }
-            }
-            if (edited) {
-                // Everything inside the patched element was replaced wholesale,
-                // so those offsets mean nothing until the next full render.
-                var inside = edited.querySelectorAll('[' + POS + ']');
-                for (var j = 0; j < inside.length; j++) { inside[j].removeAttribute(POS); }
-            }
-            for (var k = 0; k < all.length; k++) {
-                if (!all[k].hasAttribute(POS)) { continue; }
-                var value = parseInt(all[k].getAttribute(POS), 10);
-                if (value > position) { all[k].setAttribute(POS, String(value + delta)); }
-            }
-        };
     })();
     """
 }

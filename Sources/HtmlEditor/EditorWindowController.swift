@@ -322,7 +322,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
 
     // MARK: - PreviewControllerDelegate
 
-    func preview(_ preview: PreviewController, didClickAtSourcePosition position: Int) {
+    func preview(_ preview: PreviewController, didClickElementWithID id: Int) {
+        guard let position = preview.sourceOffset(forElementWithID: id) else { return }
         let length = (textView.string as NSString).length
         let location = max(0, min(position, length))
         isApplyingPreviewSelection = true
@@ -333,15 +334,28 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
 
     /// Patches just the element that changed. Rewriting the whole document here
     /// would reformat the file and bake in whatever the page's scripts had built.
-    func preview(_ preview: PreviewController, didEditElementAt position: Int, html: String) {
-        guard let range = SourceMap.elementRange(in: textView.string, startingAt: position) else { return }
+    func preview(_ preview: PreviewController, didEditElementWithID id: Int, html: String) {
+        guard let position = preview.sourceOffset(forElementWithID: id),
+              let range = SourceMap.elementRange(in: textView.string, startingAt: position) else {
+            // The markup this id described is gone. Re-render rather than write
+            // to a guessed spot — a wrong guess overwrites a neighbouring element.
+            renderPreview()
+            return
+        }
+        // Belt and braces: refuse a patch that would drop one kind of element on
+        // top of another. Nothing should reach here, and if it does, resyncing is
+        // recoverable where a bad write is not.
+        guard SourceMap.tagName(in: textView.string, at: position) == SourceMap.leadingTagName(of: html) else {
+            renderPreview()
+            return
+        }
         let existing = (textView.string as NSString).substring(with: range)
         guard existing != html else { return }
         isApplyingPreviewEdit = true
         let applied = textView.replace(range, with: html)
         isApplyingPreviewEdit = false
         guard applied else { return }
-        preview.reconcileOffsets(after: position, delta: (html as NSString).length - range.length)
+        preview.notePatch(range: range, delta: (html as NSString).length - range.length)
     }
 
     func preview(_ preview: PreviewController, didPasteImage data: Data, fileExtension: String) {

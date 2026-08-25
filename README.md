@@ -110,11 +110,17 @@ The handles are drawn in a fixed overlay tagged `data-he-ui`, stripped on the wa
 stamps, so no editor chrome ever reaches your file. Each drop or resize is one undoable step (⌘Z),
 and only the `<img>` tag itself is rewritten.
 
-Panes stay in sync through a `data-he-pos` attribute stamped onto each opening tag when the preview
-is rendered. It records the tag's character offset in the source, which is what lets a click on either
-side find its counterpart and what tells a preview edit which element to patch. The attribute exists
-only in the rendered copy — it is stripped before markup comes back from the preview, and it never
-reaches your saved file.
+Panes stay in sync through a `data-he-id` attribute stamped onto each opening tag when the preview is
+rendered. The page only ever quotes an id back; the table mapping ids to character offsets stays on
+the app side. The attribute exists only in the rendered copy — stripped before markup comes back, and
+it never reaches your saved file.
+
+That split matters more than it looks. Stamping the *offset* into the page instead means every patch
+has to be followed by an asynchronous fix-up telling the page how the markup shifted — and an edit
+posted before that fix-up lands is applied at a stale offset, which silently overwrites a neighbouring
+element. Keeping the table on the app side updates it in the same synchronous step as the edit, so
+there is no window in which an id resolves to the wrong place. If an id no longer maps to anything,
+the preview re-renders rather than guessing.
 
 ## How image pasting works
 
